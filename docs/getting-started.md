@@ -14,7 +14,7 @@
 Clone the repository and build the shadow JAR:
 
 ```bash
-git clone https://github.com/<your-org>/kc-nats-listener.git
+git clone https://github.com/altessa-s/kc-nats-listener.git
 cd kc-nats-listener
 ./gradlew clean shadowJar
 ```

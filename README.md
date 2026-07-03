@@ -1,6 +1,6 @@
 # kc-nats-listener
 
-[![Build](https://github.com/<your-org>/kc-nats-listener/actions/workflows/build.yml/badge.svg)](https://github.com/<your-org>/kc-nats-listener/actions/workflows/build.yml)
+[![Build](https://github.com/altessa-s/kc-nats-listener/actions/workflows/build.yml/badge.svg)](https://github.com/altessa-s/kc-nats-listener/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
 [![Keycloak 26.x](https://img.shields.io/badge/Keycloak-26.x-blue)](https://www.keycloak.org/)
