@@ -1,0 +1,95 @@
+name: Bug Report
+description: Report a bug in kc-nats-listener
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below.
+
+  - type: input
+    id: keycloak-version
+    attributes:
+      label: Keycloak Version
+      description: The Keycloak version you are running.
+      placeholder: "26.4.3"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: kc-nats-listener Version
+      description: The version or commit SHA of kc-nats-listener you are using.
+      placeholder: "v1.0.0 or commit SHA"
+    validations:
+      required: true
+
+  - type: input
+    id: nats-version
+    attributes:
+      label: NATS Server Version
+      description: The NATS server version (with JetStream enabled).
+      placeholder: "2.10.x"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which component is affected?
+      options:
+        - listener (event publishing / enrichment)
+        - factory (connection lifecycle / reconnection)
+        - config (environment variables)
+        - nats (JetStream streams / subjects)
+        - docker
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Configure ...
+        2. Trigger event ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened. Include Keycloak log output and stack traces if applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, relevant `KC_NATS_*` configuration (redact credentials), logs, or screenshots.
+    validations:
+      required: false

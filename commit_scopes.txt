@@ -1,0 +1,17 @@
+# Commit Scopes for kc-nats-listener
+# Use these scopes in conventional commits: type(scope): description
+# Example: feat(listener): add user data enrichment for client events
+
+# Root-level scopes
+root                        # build.gradle, settings.gradle, project-wide configs
+
+# Plugin components
+listener                    # Event listener providers (NATS + NOOP)
+factory                     # SPI factory, connection lifecycle, reconnection
+config                      # Environment variable configuration parsing
+nats                        # NATS/JetStream connection, streams, subjects
+
+# Infrastructure
+ci                          # GitHub Actions workflows, git hooks
+docker                      # Dockerfile and container packaging
+docs                        # README and docs/ documentation
