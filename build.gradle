@@ -1,0 +1,34 @@
+plugins {
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'java'
+}
+
+group 'io.altessa'
+// Overridable from CI: ./gradlew shadowJar -PpluginVersion=1.2.3 (release workflow passes the git tag)
+version = findProperty('pluginVersion') ?: '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'org.keycloak:keycloak-core:26.5.2'
+    compileOnly "org.keycloak:keycloak-server-spi:26.4.1"
+    compileOnly 'org.keycloak:keycloak-server-spi-private:26.5.2'
+    compileOnly 'org.keycloak:keycloak-services:26.4.3'
+    compileOnly "org.keycloak:keycloak-saml-core-public:26.0.6"
+    compileOnly "org.jboss.logging:jboss-logging:3.5.3.Final"
+
+    implementation 'io.nats:jnats:2.19.1'
+}
+
+shadowJar {
+    archiveBaseName.set('kc-nats-listener')
+    archiveClassifier.set('')
+    archiveVersion.set(project.version.toString())
+}
