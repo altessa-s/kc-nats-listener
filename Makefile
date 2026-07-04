@@ -37,6 +37,11 @@ check: ## Run all checks (test + build)
 
 ##@ Utilities
 
+.PHONY: hooks-install
+hooks-install: ## Enable git commit-msg validation hooks (.githooks)
+	git config core.hooksPath .githooks
+	@echo "Git hooks enabled: core.hooksPath -> .githooks"
+
 .PHONY: deps
 deps: ## Show project dependencies
 	$(GRADLE) dependencies

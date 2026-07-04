@@ -100,7 +100,7 @@ Issues and pull requests are welcome. Please make sure the project builds (`./gr
 Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`); valid scopes are listed in [commit_scopes.txt](commit_scopes.txt). Enable the local validation hook once after cloning:
 
 ```bash
-git config core.hooksPath .githooks
+make hooks-install
 ```
 
 Commit messages and PR titles are also validated in CI.
