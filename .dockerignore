@@ -1,0 +1,11 @@
+.git
+.github
+.githooks
+.gradle
+.idea
+build
+docs
+*.iml
+.DS_Store
+Dockerfile
+.dockerignore

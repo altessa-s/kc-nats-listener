@@ -52,7 +52,7 @@ For full installation steps and verification, see [Getting Started](docs/getting
 
 ## Configuration
 
-All configuration is done via environment variables. The only required variable is `KC_NATS_URL` — if it is unset, the adapter enters NOOP mode and silently drops every event.
+Configuration is done via environment variables or Keycloak SPI options (`--spi-events-listener--kc-nats-listener--<option>`). The only required setting is the NATS URL (`KC_NATS_URL`) — if it is unset, the adapter enters NOOP mode and silently drops every event.
 
 | Variable                         | Description                                                        | Default |
 |----------------------------------|--------------------------------------------------------------------|---------|

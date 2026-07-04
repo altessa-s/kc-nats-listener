@@ -1,15 +1,16 @@
 plugins {
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
     id 'java'
+    alias(libs.plugins.shadow)
 }
 
-group 'io.altessa'
+group = 'io.altessa'
 // Overridable from CI: ./gradlew shadowJar -PpluginVersion=1.2.3 (release workflow passes the git tag)
 version = findProperty('pluginVersion') ?: '1.0.0'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
 }
 
 repositories {
@@ -17,18 +18,32 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'org.keycloak:keycloak-core:26.5.2'
-    compileOnly "org.keycloak:keycloak-server-spi:26.4.1"
-    compileOnly 'org.keycloak:keycloak-server-spi-private:26.5.2'
-    compileOnly 'org.keycloak:keycloak-services:26.4.3'
-    compileOnly "org.keycloak:keycloak-saml-core-public:26.0.6"
-    compileOnly "org.jboss.logging:jboss-logging:3.5.3.Final"
+    compileOnly libs.keycloakCore
+    compileOnly libs.keycloakServerSpi
+    compileOnly libs.keycloakServerSpiPrivate
+    compileOnly libs.jbossLogging
 
-    implementation 'io.nats:jnats:2.19.1'
+    implementation libs.jnats
+
+    testImplementation libs.keycloakCore
+    testImplementation libs.keycloakServerSpi
+    testImplementation libs.keycloakServerSpiPrivate
+    testImplementation libs.jbossLogging
+
+    testImplementation libs.junitJupiter
+    testRuntimeOnly libs.junitPlatformLauncher
+}
+
+test {
+    useJUnitPlatform()
 }
 
 shadowJar {
     archiveBaseName.set('kc-nats-listener')
     archiveClassifier.set('')
     archiveVersion.set(project.version.toString())
+
+    // All provider JARs in Keycloak share one classpath; relocate the shaded
+    // jnats so it cannot clash with another provider's copy.
+    relocate 'io.nats', 'io.altessa.keycloak.nats.listener.shaded.nats'
 }

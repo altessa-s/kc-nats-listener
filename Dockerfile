@@ -1,8 +1,9 @@
-FROM gradle:8.5-jdk17-focal AS builder
+# The Gradle version is pinned by the wrapper (gradle/wrapper/gradle-wrapper.properties),
+# so a plain JDK image is enough for the build stage.
+FROM eclipse-temurin:17-jdk AS builder
 WORKDIR /usr/src/app
 COPY . .
-RUN chmod +x ./gradlew
-RUN ./gradlew shadowJar
+RUN ./gradlew shadowJar --no-daemon
 
 FROM alpine:3.23.4
 WORKDIR /usr/src/app

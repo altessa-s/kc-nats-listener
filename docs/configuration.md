@@ -2,7 +2,17 @@
 
 # Configuration
 
-All configuration is done via environment variables.
+Every option can be set in two ways, in order of precedence:
+
+1. **Keycloak SPI options** — `keycloak.conf` entries or CLI options in the form
+   `--spi-events-listener--kc-nats-listener--<option>`. The option key is the environment
+   variable name without the `KC_NATS_` prefix, lower-cased, with underscores replaced by
+   dashes. For example, `KC_NATS_MAX_RECONNECTS` becomes
+   `--spi-events-listener--kc-nats-listener--max-reconnects`.
+2. **Environment variables** (`KC_NATS_*`) — used when the SPI option is not set.
+
+The tables below document the environment variable names; the corresponding SPI option keys
+are derived with the rule above.
 
 ## Basic Connection
 

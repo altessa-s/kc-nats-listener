@@ -8,10 +8,10 @@ The adapter is a Keycloak `EventListenerProvider` that publishes admin and clien
 
 ```
 io.altessa.keycloak.nats.listener/
-├── Configuration.java                  # Env-var-driven configuration parsing
-├── NATSEventListenerProviderFactory    # SPI entry point; manages connection lifecycle
-├── NATSEventListenerProvider           # Publishes events when connection is healthy
-└── NOOPEventListenerProvider           # No-op fallback when NATS is unavailable
+├── Configuration.java                  # Option parsing (SPI scope + environment variables)
+├── NatsEventListenerProviderFactory    # SPI entry point; manages connection lifecycle
+├── NatsEventListenerProvider           # Publishes events when connection is healthy
+└── NoopEventListenerProvider           # No-op fallback when NATS is unavailable
 ```
 
 ## SPI Registration
@@ -24,15 +24,14 @@ src/main/resources/META-INF/services/org.keycloak.events.EventListenerProviderFa
 
 ## Connection State Management
 
-The factory tracks one of three states and routes events accordingly:
+The factory owns a single NATS connection shared by all provider instances. While no connection
+is available — the URL is not configured, or the initial connection has not succeeded yet — the
+factory hands out a no-op provider and events are dropped. Once connected, it hands out the
+publishing provider.
 
-| State             | Meaning                                                       | Behaviour                              |
-|-------------------|---------------------------------------------------------------|----------------------------------------|
-| `NOT_INITIALIZED` | Initial state before the first connection attempt            | Events dropped                          |
-| `CONNECTED`       | Successfully connected to NATS JetStream                     | Events published                        |
-| `FAILED`          | Connection attempt failed; adapter in NOOP mode              | Events dropped; background retry runs   |
-
-When the adapter enters `FAILED` due to an initial connection failure (and `KC_NATS_MAX_RECONNECTS != 0`), a background reconnection task retries periodically until NATS becomes reachable.
+If the initial connection fails (and `KC_NATS_MAX_RECONNECTS != 0`), a background reconnection
+task retries periodically until NATS becomes reachable. Reconnection of an already-established
+connection is handled by the NATS client itself.
 
 ## Event Flow
 
@@ -41,7 +40,12 @@ When the adapter enters `FAILED` due to an initial connection failure (and `KC_N
 3. **User data enrichment** *(client events only)* — loads user profile and attributes from the realm.
 4. **Serialization** — event converted to JSON.
 5. **Subject building** — subject derived from event metadata.
-6. **NATS publish** — event sent to JetStream (if connection is healthy).
+6. **Transaction completion** — the publish is deferred until the Keycloak transaction commits;
+   events from rolled-back transactions are never published.
+7. **NATS publish** — event sent to JetStream asynchronously; the request thread does not wait
+   for the JetStream acknowledgement.
+
+Delivery is **at-most-once**: if a publish fails, the error is logged and the event is dropped.
 
 When the connection is unhealthy:
 
@@ -50,15 +54,16 @@ When the connection is unhealthy:
 
 ## Event Data Enrichment
 
-**Client events** are enriched with user data when a `userId` is present in the event. A `userRepresentation` JSON field is added containing:
+**Client events** are enriched with user data when a `userId` is present in the event. A nested `userRepresentation` JSON object is added containing:
 
 - Profile data: `id`, `username`, `email`, `firstName`, `lastName`
 - Account status: `emailVerified`, `enabled`, `createdTimestamp`
 - Custom attributes (multi-valued attributes flattened to single string values)
 
-This mirrors the `representation` field already present in **admin events**, providing a consistent shape across both event types.
-
 **Admin events** are published as-is — the existing `representation` field is preserved.
+
+> **Privacy note:** enrichment publishes personal data (username, e-mail, names, attributes) to
+> NATS. Configure stream retention and downstream consumers accordingly.
 
 ## Payload Examples
 
@@ -106,7 +111,19 @@ Subject: `KEYCLOAK.EVENTS.CLIENT.EXAMPLE.SUCCESS.ACCOUNT-CONSOLE.UPDATE_PASSWORD
     "custom_required_action": "UPDATE_PASSWORD",
     "username": "johnny"
   },
-  "userRepresentation": "{\"id\":\"db85bef5-...\",\"username\":\"johnny\",\"attributes\":{\"customField1\":\"value1\"}}"
+  "userRepresentation": {
+    "id": "db85bef5-f1b8-462d-a563-7de86cf7a2da",
+    "username": "johnny",
+    "email": "john@doe.com",
+    "firstName": "John",
+    "lastName": "Doe",
+    "emailVerified": true,
+    "enabled": true,
+    "createdTimestamp": 1628089918000,
+    "attributes": {
+      "customField1": "value1"
+    }
+  }
 }
 ```
 
@@ -115,19 +132,18 @@ Subject: `KEYCLOAK.EVENTS.CLIENT.EXAMPLE.SUCCESS.ACCOUNT-CONSOLE.UPDATE_PASSWORD
 ### Events not appearing in NATS
 
 1. Verify `kc-nats-listener` is in **Realm Settings > Events > Config** as an active event listener.
-2. Check Keycloak logs for connection state messages:
+2. Check Keycloak logs for connection messages:
    ```
    INFO: NATS connection established to nats://localhost:4222
-   INFO: Connection state changed from NOT_INITIALIZED to CONNECTED
+   INFO: NATS event listener adapter initialized successfully
    ```
-3. If you see NOOP messages:
+3. If you see connection failures:
    ```
-   ERROR: Failed to connect to NATS server
-   INFO: Events will NOT be published to NATS. Provider will use NOOP mode.
+   ERROR: Failed to connect to NATS server at nats://... Events will NOT be published until the connection is established.
    ```
    - Verify NATS is running and reachable.
    - Confirm `KC_NATS_URL` is **explicitly set** (not empty).
-4. If you see `KC_NATS_URL not set`, the adapter is in NOOP mode by design — set the variable to enable publishing.
+4. If you see `NATS URL is not configured`, the adapter is in NOOP mode by design — set `KC_NATS_URL` (or the corresponding SPI option) to enable publishing.
 
 ### Background reconnection not working
 

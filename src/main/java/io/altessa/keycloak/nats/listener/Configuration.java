@@ -12,24 +12,29 @@ import io.nats.client.api.DiscardPolicy;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
+import org.jboss.logging.Logger;
+import org.keycloak.Config;
 
 import java.time.Duration;
-import java.util.Optional;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * Configuration record for the Keycloak NATS JetStream adapter.
  *
- * <p>This record loads configuration from environment variables and provides settings for:
- * <ul>
- *   <li>NATS server connection URL</li>
- *   <li>Admin events JetStream stream configuration</li>
- *   <li>Client events JetStream stream configuration</li>
- * </ul>
+ * <p>Every option is resolved from two sources, in order of precedence:
+ * <ol>
+ *   <li>The SPI configuration scope — {@code keycloak.conf} entries or CLI options in the form
+ *       {@code --spi-events-listener--kc-nats-listener--<option>} (e.g. {@code --spi-events-listener--kc-nats-listener--url}).
+ *       The scope key is the environment variable name without the {@code KC_NATS_} prefix,
+ *       lower-cased, with underscores replaced by dashes (e.g. {@code KC_NATS_MAX_RECONNECTS} → {@code max-reconnects}).</li>
+ *   <li>Environment variables ({@code KC_NATS_*}).</li>
+ * </ol>
  *
  * <p>Subject patterns are fixed:
  * <ul>
- *   <li>Admin events: {@code keycloak.event.admin.>}</li>
- *   <li>Client events: {@code keycloak.event.client.>}</li>
+ *   <li>Admin events: {@code KEYCLOAK.EVENTS.ADMIN.>}</li>
+ *   <li>Client events: {@code KEYCLOAK.EVENTS.CLIENT.>}</li>
  * </ul>
  *
  * <p>Environment variables:
@@ -37,11 +42,11 @@ import java.util.Optional;
  *   <li>{@code KC_NATS_URL} - NATS server URL (default: nats://localhost:4222)</li>
  *   <li>{@code KC_NATS_ADMIN_STREAM_NAME} - Admin stream name (required to enable admin stream)</li>
  *   <li>{@code KC_NATS_CLIENT_STREAM_NAME} - Client stream name (required to enable client stream)</li>
- *   <li>See README.md for full list of stream configuration options</li>
+ *   <li>See docs/configuration.md for the full list of stream configuration options</li>
  * </ul>
  *
  * @param url                  NATS server connection URL
- * @param urlExplicitlySet     Whether KC_NATS_URL was explicitly set in environment variables
+ * @param urlExplicitlySet     Whether the NATS URL was explicitly configured (scope or environment)
  * @param createStreams        Whether to create/update JetStream streams on startup
  * @param maxReconnects        Maximum number of reconnection attempts (0 = no reconnect, -1 = unlimited)
  * @param reconnectWaitSeconds Wait time in seconds between reconnection attempts
@@ -63,6 +68,11 @@ public record Configuration(
         StreamConfiguration adminStreamConfig,
         StreamConfiguration clientStreamConfig
 ) {
+    private static final Logger LOGGER = Logger.getLogger(Configuration.class);
+
+    /** Prefix shared by all environment variables of this adapter. */
+    private static final String ENV_PREFIX = "KC_NATS_";
+
     /** Subject pattern for admin events stream */
     private static final String ADMIN_STREAM_SUBJECTS = "KEYCLOAK.EVENTS.ADMIN.>";
 
@@ -76,235 +86,210 @@ public record Configuration(
     public static final String CLIENT_EVENT_TOPIC_TEMPLATE = "KEYCLOAK.EVENTS.CLIENT.%s.%s.%s.%s";
 
     /**
-     * Loads configuration from system environment variables.
+     * Loads configuration from the SPI configuration scope and system environment variables.
      *
-     * <p>Reads {@code KC_NATS_URL} for the NATS connection URL.
-     * <p>Reads {@code KC_NATS_CREATE_STREAMS} to determine if streams should be created/updated (default: false).
-     * Stream configurations are loaded only if their respective {@code _NAME}
-     * environment variables are set.
-     *
+     * @param scope the SPI configuration scope passed by Keycloak, may be null
      * @return A new Configuration instance with loaded settings
      */
-    public static Configuration loadFromEnv() {
-        final String natsUrlEnv = System.getenv("KC_NATS_URL");
-        final boolean urlExplicitlySet = natsUrlEnv != null && !natsUrlEnv.trim().isEmpty();
-        final String url = urlExplicitlySet ? natsUrlEnv : Options.DEFAULT_URL;
-        final boolean createStreams = "true".equalsIgnoreCase(System.getenv("KC_NATS_CREATE_STREAMS"));
+    public static Configuration load(final Config.Scope scope) {
+        return load(scope, System.getenv());
+    }
+
+    /**
+     * Loads configuration from the given scope and environment map. Extracted for testability.
+     *
+     * @param scope the SPI configuration scope, may be null
+     * @param env   the environment variables to read from
+     * @return A new Configuration instance with loaded settings
+     */
+    static Configuration load(final Config.Scope scope, final Map<String, String> env) {
+        final String configuredUrl = getOption(scope, env, "KC_NATS_URL");
+        final boolean urlExplicitlySet = configuredUrl != null;
+        final String url = urlExplicitlySet ? configuredUrl : Options.DEFAULT_URL;
+        final boolean createStreams = getBooleanOption(scope, env, "KC_NATS_CREATE_STREAMS", false);
 
         // Reconnection settings. Default to unlimited reconnects (-1): in Kubernetes a NATS
         // outage (node drain / pod reschedule) can easily exceed the finite NATS default of 60
-        // attempts, after which the client gives up and the listener stays in NOOP mode until
+        // attempts, after which the client gives up and the listener stays in no-op mode until
         // Keycloak restarts. Unlimited retries let it recover on its own and re-resolve DNS.
-        final int maxReconnects = parseIntOrDefault(System.getenv("KC_NATS_MAX_RECONNECTS"), -1);
-        final long reconnectWaitSeconds = parseLongOrDefault(System.getenv("KC_NATS_RECONNECT_WAIT_SECONDS"), 2L); // NATS default: 2 seconds
+        final int maxReconnects = getIntOption(scope, env, "KC_NATS_MAX_RECONNECTS", -1);
+        final long reconnectWaitSeconds = getLongOption(scope, env, "KC_NATS_RECONNECT_WAIT_SECONDS", 2L); // NATS default: 2 seconds
 
         // Keepalive ping interval. Lower than the NATS default of 120s so a dead TCP connection
         // (e.g. NATS pod killed / node restart) is detected within ~30s and triggers a reconnect.
-        final long pingIntervalSeconds = parseLongOrDefault(System.getenv("KC_NATS_PING_INTERVAL_SECONDS"), 30L);
+        final long pingIntervalSeconds = getLongOption(scope, env, "KC_NATS_PING_INTERVAL_SECONDS", 30L);
 
         // Defaults to true: re-resolve the hostname on each (re)connect (Kubernetes-friendly).
         // Set KC_NATS_NO_RESOLVE_HOSTNAMES=false to restore the default jnats IP-pinning behaviour.
-        final boolean noResolveHostnames = parseBooleanOrDefault(System.getenv("KC_NATS_NO_RESOLVE_HOSTNAMES"), true);
+        final boolean noResolveHostnames = getBooleanOption(scope, env, "KC_NATS_NO_RESOLVE_HOSTNAMES", true);
 
-        final StreamConfiguration adminStreamConfig = buildStreamConfigFromEnv("KC_NATS_ADMIN_STREAM", ADMIN_STREAM_SUBJECTS);
-        final StreamConfiguration clientStreamConfig = buildStreamConfigFromEnv("KC_NATS_CLIENT_STREAM", CLIENT_STREAM_SUBJECTS);
+        final StreamConfiguration adminStreamConfig = buildStreamConfig(scope, env, "KC_NATS_ADMIN_STREAM", ADMIN_STREAM_SUBJECTS);
+        final StreamConfiguration clientStreamConfig = buildStreamConfig(scope, env, "KC_NATS_CLIENT_STREAM", CLIENT_STREAM_SUBJECTS);
 
         return new Configuration(url, urlExplicitlySet, createStreams, maxReconnects, reconnectWaitSeconds, pingIntervalSeconds, noResolveHostnames, adminStreamConfig, clientStreamConfig);
     }
 
     /**
-     * Builds a JetStream StreamConfiguration from environment variables.
+     * Builds a JetStream StreamConfiguration from the scope and environment.
      *
-     * @param prefix Environment variable prefix (e.g., "ADMIN_STREAM" or "CLIENT_STREAM")
-     * @param subjects Subject pattern for the stream (e.g., "keycloak.event.admin.>")
-     * @return StreamConfiguration if NAME is set, null otherwise
+     * @param scope    the SPI configuration scope, may be null
+     * @param env      the environment variables to read from
+     * @param prefix   Environment variable prefix (e.g., "KC_NATS_ADMIN_STREAM" or "KC_NATS_CLIENT_STREAM")
+     * @param subjects Subject pattern for the stream (e.g., "KEYCLOAK.EVENTS.ADMIN.>")
+     * @return StreamConfiguration if {@code <prefix>_NAME} is set, null otherwise
      */
-    private static StreamConfiguration buildStreamConfigFromEnv(String prefix, String subjects) {
-        String name = System.getenv(prefix + "_NAME");
-        if (name == null || name.trim().isEmpty()) {
+    private static StreamConfiguration buildStreamConfig(final Config.Scope scope, final Map<String, String> env,
+                                                         final String prefix, final String subjects) {
+        final String name = getOption(scope, env, prefix + "_NAME");
+        if (name == null) {
             return null;
         }
 
-        StreamConfiguration.Builder builder = StreamConfiguration.builder()
+        final StreamConfiguration.Builder builder = StreamConfiguration.builder()
                 .name(name)
                 .subjects(subjects);
 
-        // Add optional parameters if configured
-        String maxBytesStr = System.getenv(prefix + "_MAX_BYTES");
-        if (maxBytesStr != null) {
-            Long maxBytes = parseLong(maxBytesStr);
-            if (maxBytes != null) {
-                builder.maxBytes(maxBytes);
-            }
+        final Long maxBytes = getLongOption(scope, env, prefix + "_MAX_BYTES");
+        if (maxBytes != null) {
+            builder.maxBytes(maxBytes);
         }
 
-        String maxAgeStr = System.getenv(prefix + "_MAX_STREAM_AGE_SECONDS");
-        if (maxAgeStr != null) {
-            Long maxAge = parseLong(maxAgeStr);
-            if (maxAge != null) {
-                builder.maxAge(Duration.ofSeconds(maxAge));
-            }
+        final Long maxAgeSeconds = getLongOption(scope, env, prefix + "_MAX_STREAM_AGE_SECONDS");
+        if (maxAgeSeconds != null) {
+            builder.maxAge(Duration.ofSeconds(maxAgeSeconds));
         }
 
-        String maxMsgsStr = System.getenv(prefix + "_STREAM_MAX_MSGS");
-        if (maxMsgsStr != null) {
-            Long maxMsgs = parseLong(maxMsgsStr);
-            if (maxMsgs != null) {
-                builder.maxMessages(maxMsgs);
-            }
+        final Long maxMessages = getLongOption(scope, env, prefix + "_STREAM_MAX_MSGS");
+        if (maxMessages != null) {
+            builder.maxMessages(maxMessages);
         }
 
-        String maxMsgsPerSubjectStr = System.getenv(prefix + "_MAX_MSGS_PER_SUBJECT");
-        if (maxMsgsPerSubjectStr != null) {
-            Long maxMsgsPerSubject = parseLong(maxMsgsPerSubjectStr);
-            if (maxMsgsPerSubject != null) {
-                builder.maxMessagesPerSubject(maxMsgsPerSubject);
-            }
+        final Long maxMessagesPerSubject = getLongOption(scope, env, prefix + "_MAX_MSGS_PER_SUBJECT");
+        if (maxMessagesPerSubject != null) {
+            builder.maxMessagesPerSubject(maxMessagesPerSubject);
         }
 
-        String storageTypeStr = System.getenv(prefix + "_STORAGE_TYPE");
-        if (storageTypeStr != null) {
-            StorageType storageType = parseStorageType(storageTypeStr);
-            if (storageType != null) {
-                builder.storageType(storageType);
-            }
+        final StorageType storageType = getEnumOption(scope, env, prefix + "_STORAGE_TYPE", StorageType.class);
+        if (storageType != null) {
+            builder.storageType(storageType);
         }
 
-        String retentionPolicyStr = System.getenv(prefix + "_RETENTION_POLICY");
-        if (retentionPolicyStr != null) {
-            RetentionPolicy retentionPolicy = parseRetentionPolicy(retentionPolicyStr);
-            if (retentionPolicy != null) {
-                builder.retentionPolicy(retentionPolicy);
-            }
+        final RetentionPolicy retentionPolicy = getEnumOption(scope, env, prefix + "_RETENTION_POLICY", RetentionPolicy.class);
+        if (retentionPolicy != null) {
+            builder.retentionPolicy(retentionPolicy);
         }
 
-        String discardPolicyStr = System.getenv(prefix + "_DISCARD_POLICY");
-        if (discardPolicyStr != null) {
-            DiscardPolicy discardPolicy = parseDiscardPolicy(discardPolicyStr);
-            if (discardPolicy != null) {
-                builder.discardPolicy(discardPolicy);
-            }
+        final DiscardPolicy discardPolicy = getEnumOption(scope, env, prefix + "_DISCARD_POLICY", DiscardPolicy.class);
+        if (discardPolicy != null) {
+            builder.discardPolicy(discardPolicy);
         }
 
-        String duplicateWindowStr = System.getenv(prefix + "_DUPLICATE_WINDOW_SECONDS");
-        if (duplicateWindowStr != null) {
-            Long duplicateWindow = parseLong(duplicateWindowStr);
-            if (duplicateWindow != null) {
-                builder.duplicateWindow(Duration.ofSeconds(duplicateWindow));
-            }
+        final Long duplicateWindowSeconds = getLongOption(scope, env, prefix + "_DUPLICATE_WINDOW_SECONDS");
+        if (duplicateWindowSeconds != null) {
+            builder.duplicateWindow(Duration.ofSeconds(duplicateWindowSeconds));
         }
 
-        String numReplicasStr = System.getenv(prefix + "_NUM_REPLICAS");
-        if (numReplicasStr != null) {
-            Integer numReplicas = parseInteger(numReplicasStr);
-            if (numReplicas != null) {
-                builder.replicas(numReplicas);
-            }
+        final Integer numReplicas = getIntegerOption(scope, env, prefix + "_NUM_REPLICAS");
+        if (numReplicas != null) {
+            builder.replicas(numReplicas);
         }
 
         return builder.build();
     }
 
     /**
-     * Safely parses a string to Long, returning null if parsing fails.
+     * Resolves an option value: SPI scope first, then the environment variable.
+     * Blank values are treated as unset.
+     *
+     * @return the trimmed value, or null if the option is not set
      */
-    private static Long parseLong(String value) {
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
+    private static String getOption(final Config.Scope scope, final Map<String, String> env, final String envKey) {
+        if (scope != null) {
+            final String value = scope.get(scopeKey(envKey));
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        final String value = env.get(envKey);
+        return value != null && !value.trim().isEmpty() ? value.trim() : null;
+    }
+
+    /**
+     * Maps an environment variable name to the corresponding SPI scope key,
+     * e.g. {@code KC_NATS_MAX_RECONNECTS} → {@code max-reconnects}.
+     */
+    private static String scopeKey(final String envKey) {
+        return envKey.substring(ENV_PREFIX.length()).toLowerCase(Locale.ROOT).replace('_', '-');
+    }
+
+    private static boolean getBooleanOption(final Config.Scope scope, final Map<String, String> env,
+                                            final String envKey, final boolean defaultValue) {
+        final String value = getOption(scope, env, envKey);
+        return value != null ? Boolean.parseBoolean(value) : defaultValue;
+    }
+
+    private static int getIntOption(final Config.Scope scope, final Map<String, String> env,
+                                    final String envKey, final int defaultValue) {
+        final Integer value = getIntegerOption(scope, env, envKey);
+        return value != null ? value : defaultValue;
+    }
+
+    private static long getLongOption(final Config.Scope scope, final Map<String, String> env,
+                                      final String envKey, final long defaultValue) {
+        final Long value = getLongOption(scope, env, envKey);
+        return value != null ? value : defaultValue;
+    }
+
+    /**
+     * @return the option parsed as Long, or null if unset or not a valid number (logged as a warning)
+     */
+    private static Long getLongOption(final Config.Scope scope, final Map<String, String> env, final String envKey) {
+        final String value = getOption(scope, env, envKey);
+        if (value == null) {
             return null;
-        }
-    }
-
-    /**
-     * Safely parses a string to Integer, returning null if parsing fails.
-     */
-    private static Integer parseInteger(String value) {
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /**
-     * Safely parses a string to int, returning default value if parsing fails.
-     */
-    private static int parseIntOrDefault(String value, int defaultValue) {
-        if (value == null || value.trim().isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Parses a boolean from a string, returning the default if unset/blank.
-     * Accepts "true"/"false" case-insensitively; any other non-blank value is treated as false.
-     */
-    private static boolean parseBooleanOrDefault(String value, boolean defaultValue) {
-        if (value == null || value.trim().isEmpty()) {
-            return defaultValue;
-        }
-        return Boolean.parseBoolean(value.trim());
-    }
-
-    /**
-     * Safely parses a string to long, returning default value if parsing fails.
-     */
-    private static long parseLongOrDefault(String value, long defaultValue) {
-        if (value == null || value.trim().isEmpty()) {
-            return defaultValue;
         }
         try {
             return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Parses storage type from string (case-insensitive).
-     *
-     * @param value String value (FILE or MEMORY)
-     * @return StorageType or null if invalid
-     */
-    private static StorageType parseStorageType(String value) {
-        try {
-            return StorageType.valueOf(value.toUpperCase());
-        } catch (IllegalArgumentException e) {
+        } catch (final NumberFormatException e) {
+            LOGGER.warnf("Ignoring invalid numeric value '%s' for option %s", value, envKey);
             return null;
         }
     }
 
     /**
-     * Parses retention policy from string (case-insensitive).
-     *
-     * @param value String value (LIMITS, INTEREST, or WORKQUEUE)
-     * @return RetentionPolicy or null if invalid
+     * @return the option parsed as Integer, or null if unset or not a valid number (logged as a warning)
      */
-    private static RetentionPolicy parseRetentionPolicy(String value) {
+    private static Integer getIntegerOption(final Config.Scope scope, final Map<String, String> env, final String envKey) {
+        final String value = getOption(scope, env, envKey);
+        if (value == null) {
+            return null;
+        }
         try {
-            return RetentionPolicy.valueOf(value.toUpperCase());
-        } catch (IllegalArgumentException e) {
+            return Integer.parseInt(value);
+        } catch (final NumberFormatException e) {
+            LOGGER.warnf("Ignoring invalid numeric value '%s' for option %s", value, envKey);
             return null;
         }
     }
 
     /**
-     * Parses discard policy from string (case-insensitive).
-     *
-     * @param value String value (OLD or NEW)
-     * @return DiscardPolicy or null if invalid
+     * @return the option parsed as the given enum type (case-insensitive), or null if unset
+     * or not a valid constant (logged as a warning)
      */
-    private static DiscardPolicy parseDiscardPolicy(String value) {
-        try {
-            return DiscardPolicy.valueOf(value.toUpperCase());
-        } catch (IllegalArgumentException e) {
+    private static <E extends Enum<E>> E getEnumOption(final Config.Scope scope, final Map<String, String> env,
+                                                       final String envKey, final Class<E> type) {
+        final String value = getOption(scope, env, envKey);
+        if (value == null) {
             return null;
         }
+        // Case-insensitive matching: jnats enum constants are CamelCase (e.g. Memory, WorkQueue),
+        // while the documented option values are upper-case (MEMORY, WORKQUEUE).
+        for (final E constant : type.getEnumConstants()) {
+            if (constant.name().equalsIgnoreCase(value)) {
+                return constant;
+            }
+        }
+        LOGGER.warnf("Ignoring invalid value '%s' for option %s", value, envKey);
+        return null;
     }
 }

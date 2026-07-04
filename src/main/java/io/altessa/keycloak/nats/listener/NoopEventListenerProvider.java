@@ -12,9 +12,11 @@ import org.keycloak.events.EventListenerProvider;
 import org.keycloak.events.admin.AdminEvent;
 
 /**
- * Does nothing as I couldn't find a way of cancelling event listener provider creation with an error
+ * No-op fallback used while no NATS connection is available. The event listener SPI does not
+ * allow {@link org.keycloak.events.EventListenerProviderFactory#create} to fail, so a no-op
+ * instance is returned instead and events are silently dropped.
  */
-public class NOOPEventListenerProvider implements EventListenerProvider {
+public class NoopEventListenerProvider implements EventListenerProvider {
     @Override
     public void onEvent(final Event event) {}
 

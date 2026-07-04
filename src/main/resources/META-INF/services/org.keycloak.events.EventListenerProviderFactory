@@ -1,1 +1,1 @@
-io.altessa.keycloak.nats.listener.NATSEventListenerProviderFactory
+io.altessa.keycloak.nats.listener.NatsEventListenerProviderFactory
