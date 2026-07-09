@@ -57,6 +57,16 @@ version: ## Show project version info
 	@echo "Commit:   $(COMMIT)"
 	@echo "JAR:      $(LIBS_DIR)/$(PROJECT)-*.jar"
 
+##@ Container
+
+.PHONY: docker-build
+docker-build: ## Build the container image locally (tag: local)
+	docker build -t $(PROJECT):local .
+
+.PHONY: docker-run
+docker-run: docker-build ## Build then run the image (prints JAR location)
+	docker run --rm $(PROJECT):local
+
 ##@ Help
 
 .PHONY: help
